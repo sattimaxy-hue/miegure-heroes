@@ -1,0 +1,7 @@
+{
+  "name": "miegure",
+  "version": "1.0.0",
+  "description": "ミエグレヒーローズ STAGE 1",
+  "type": "module",
+  "main": "game.js"
+}
