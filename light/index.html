@@ -1970,7 +1970,7 @@ SPRITES.bgDemo2.src = 'data:image/webp;base64,UklGRvqnAQBXRUJQVlA4IO6nAQAwjQSdAS
 
 // ===== バージョン(タイトル画面の右下に小さく出す。履歴と巻き戻しは VERSIONS.md) =====
 const GAME_LIGHT = true; // Light版
-const GAME_VERSION = 'v0.88';
+const GAME_VERSION = 'v0.89';
 // ===== 難易度(STARTの後の画面で選ぶ。選んだものはこの端末に覚えておく) =====
 // dmg=敵(ボス含む)から受けるダメージの倍率 / hp=敵とボスの体力の倍率 / cd=敵とボスが次に攻撃してくるまでの間隔の倍率
 const DIFFICULTY = {
@@ -6737,7 +6737,7 @@ function updateBoss() {
       addFx(boss.x, boss.y - 20, 'smoke', null, 2.2);
     }
     if (before < E.roar && p >= E.roar) {
-      // 咆哮:画面が揺れ、ボスの周りから棘が噴き出す(演出のみ・ダメージ無し)
+      // 咆哮:画面が揺れ、ボスの周りに瘴気と瓦礫が飛ぶ(演出のみ・ダメージ無し)
       // 機械っぽい声で「コワス…」と叫ぶ
       if (audioCtx) {
         try {
@@ -6747,11 +6747,7 @@ function updateBoss() {
       shake = 18;
       flashWhite = 8;
       hitStop = Math.max(hitStop, 6);
-      // 棘はプレイヤーと反対側と、ボスの奥に出して、プレイヤーに当たったように見えないようにする
-      const away = player.x < boss.x ? 1 : -1;
-      addFx(boss.x + away * 95 * BOSS_SIZE, boss.y + 6, 'spike', null, 1);
-      addFx(boss.x + away * 175 * BOSS_SIZE, boss.y - 20, 'spike', null, 1);
-      addFx(boss.x + away * 40 * BOSS_SIZE, boss.y - 42, 'spike', null, 0.9);
+      // (2026-11-25 地面からの柱は出さない。攻撃の「地面殴り」と見分けがつかず、登場後も残っていたため)
       for (let i = 0; i < 6; i++)
         addFx(boss.x + (Math.random() - 0.5) * 160, boss.y - (30 + Math.random() * 140) * BOSS_SIZE, 'corrupt', null, 1.4);
       for (let i = 0; i < 5; i++)
