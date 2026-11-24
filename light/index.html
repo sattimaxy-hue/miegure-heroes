@@ -1970,7 +1970,7 @@ SPRITES.bgDemo2.src = 'data:image/webp;base64,UklGRvqnAQBXRUJQVlA4IO6nAQAwjQSdAS
 
 // ===== バージョン(タイトル画面の右下に小さく出す。履歴と巻き戻しは VERSIONS.md) =====
 const GAME_LIGHT = true; // Light版
-const GAME_VERSION = 'v0.86';
+const GAME_VERSION = 'v0.87';
 // ===== 難易度(STARTの後の画面で選ぶ。選んだものはこの端末に覚えておく) =====
 // dmg=敵(ボス含む)から受けるダメージの倍率 / hp=敵とボスの体力の倍率 / cd=敵とボスが次に攻撃してくるまでの間隔の倍率
 const DIFFICULTY = {
@@ -2893,6 +2893,9 @@ const BOSS_ANIM = { deathDur: 84, reviveDur: 60, postDur: 14, turnDur: 12 };
 const KB_MOTION = { dashF: 9, blend: 5, lean: 0.05, lunge: 26, ghost: 5 };
 // ヒステリックウェイブのふちどり。w:太さ(px) / rgb:ふちの色(濃い紺) / cut:これより薄いしぶきはふちを付けない(0〜255)
 //   fill:髪のすき間を埋める大きさ(元の絵のドット数) / inner:すき間の奥を暗くする濃さ(0〜1)
+// 2026-11-25 瓦礫の王がだんだん壊れていく。at:この体力の割合を切ると次の段階 / shrink:1段階ごとに小さくなる割合
+//   chunks:BREAK!で飛び散る塊の数 / crumble:小石がこぼれる間隔(F。[2段階目, 3段階目]) / cracks:段階ごとに増えるヒビの本数
+const KB_BREAK = { at: [0.75, 0.5, 0.25], shrink: 0.025, chunks: 5, crumble: [34, 16], cracks: [5, 6, 7] };
 const HW_OUTLINE = { w: 2.5, rgb: [10, 12, 42], cut: 110, fill: 2, inner: 0.55 };
 const BOSS_DEATH_SEQ = ['kbHurtL2', 'kbHurtL3', 'kbDeath1', 'kbDeath2', 'kbDeath3', 'kbDeath4', 'kbDeath5', 'kbDeath6', 'kbDeath7', 'kbDeath8'];
 function seqFrame(prefix, n, p) {
@@ -6770,6 +6773,7 @@ function updateBoss() {
   }
   if (boss.hitFlash > 0) boss.hitFlash--;
   if (boss.ghosts) { boss.ghosts.forEach((g) => (g.a -= 0.12)); boss.ghosts = boss.ghosts.filter((g) => g.a > 0); }
+  kbBreakUpdate(); // 体力が減るにつれて壊れていく
   boss.rage = boss.hp <= boss.maxHp * BOSS_SPEC.rageRatio;
   if (boss.quakeHold > 0) {
     // 柱が出ている間:その場で地面を叩き続ける(移動・振り向き・次の攻撃なし、押されても動かない)
@@ -7000,6 +7004,7 @@ function updateBoss() {
     if (!boss.revived && Math.random() < 0.2) {
       boss.revived = true;
       boss.hp = Math.ceil(boss.maxHp / 2);
+      boss.breakStage = 1; // 瓦礫が寄り集まって、壊れ方は1段階目まで戻る
       boss.rage = true;
       boss.teleTimer = 0;
       boss.teleType = null;
@@ -7793,17 +7798,179 @@ function drawBoss(ox) {
     if (!(cyc && g0 === g1) && !(boss.hitFlash > 0)) { boss.blendKey = boss.drawKey; boss.blendT = KM.blend; }
   }
   boss.drawKey = key;
+  const brk = boss.dying > 0 ? 0 : boss.breakStage || 0;
+  const bsc = sc * BOSS_DRAW_MUL * (1 - KB_BREAK.shrink * brk); // 壊れるほど、削れてひと回りずつ小さく
   ctx.translate(sx + offX, by + offY);
   if (rot) ctx.rotate(rot);
   if (boss.blendT > 0 && boss.blendKey) {
     ctx.save();
     ctx.globalAlpha = (boss.blendT / (KM.blend + 1)) * 0.75;
-    drawSprite(boss.blendKey, 0, 0, sc * BOSS_DRAW_MUL, face, 0, null, false);
+    drawSprite(boss.blendKey, 0, 0, bsc, face, 0, null, false);
     ctx.restore();
     boss.blendT--;
   }
-  drawSprite(key, 0, 0, sc * BOSS_DRAW_MUL, face, flick, null, false); // 引き伸ばしが大きいので補間して滑らかに
+  drawSprite.img = kbCracked(key, brk); // ヒビの入った絵(壊れていない時は元の絵)
+  drawSprite(key, 0, 0, bsc, face, flick, null, false); // 引き伸ばしが大きいので補間して滑らかに
+  drawSprite.img = null;
   ctx.restore();
+  drawKbChunks(ox); // 体から落ちた瓦礫
+}
+// ===== 瓦礫の王がだんだん壊れていく =====
+function kbBreakStageOf(b) {
+  const r = b.hp / b.maxHp;
+  let s = 0;
+  KB_BREAK.at.forEach((t, i) => { if (r < t) s = i + 1; });
+  return s;
+}
+function kbBreakUpdate() {
+  if (!boss || boss.kind === 'hw' || boss.entrance > 0 || boss.dying > 0) return;
+  if (boss.breakStage === undefined) boss.breakStage = 0;
+  const s = kbBreakStageOf(boss);
+  if (s > boss.breakStage) {
+    boss.breakStage = s;
+    // BREAK!:大きな塊が飛び散る
+    shake = Math.max(shake, 12);
+    hitStop = Math.max(hitStop, 6);
+    sfx('boom');
+    addFx(boss.x, boss.y - 150 * BOSS_SIZE, 'text', 'BREAK!');
+    for (let i = 0; i < KB_BREAK.chunks + s; i++) kbAddChunk(1);
+    for (let i = 0; i < 6; i++) kbAddChunk(0.45); // 細かいかけらも一緒に
+  }
+  // こぼれ続ける小石
+  if (boss.breakStage >= 2 && !(boss.reviveAnim > 0)) {
+    const iv = KB_BREAK.crumble[Math.min(1, boss.breakStage - 2)];
+    if (animTick % iv === 0) {
+      kbAddChunk(0.45);
+    }
+  }
+}
+// 体から転がり落ちる瓦礫の塊(大きさ big:1=BREAK!の大きな塊、0.45=こぼれる小石)
+function kbAddChunk(big) {
+  if (!boss.chunks) boss.chunks = [];
+  const face = boss.face || 1;
+  const dir = Math.random() < 0.7 ? -face : face; // 多くは背中側へ飛ぶ
+  boss.chunks.push({
+    x: boss.x + (Math.random() - 0.5) * 90 * BOSS_SIZE,
+    gy: boss.y + (Math.random() - 0.3) * 30, // 落ちる地面の高さ(奥行き)
+    z: (60 + Math.random() * 120) * BOSS_SIZE,
+    vx: dir * (big > 0.6 ? 2 + Math.random() * 5 : 0.5 + Math.random() * 1.5),
+    vz: big > 0.6 ? 5 + Math.random() * 6 : Math.random() * 2,
+    rot: Math.random() * 6.28,
+    vr: (Math.random() - 0.5) * (big > 0.6 ? 0.4 : 0.2),
+    r: big > 0.6 ? 16 + Math.random() * 14 : 6 + Math.random() * 5, // 塊の大きさ(px、手前の大きさで)
+    pts: Array.from({ length: 7 }, (_, i) => 0.65 + Math.random() * 0.45), // ゴツゴツした形
+    red: Math.random() < (big > 0.6 ? 0.35 : 0.1), // ときどき赤い結晶のかけら
+    shade: 205 + Math.floor(Math.random() * 40),
+    t: 0,
+    rest: 0,
+  });
+}
+function drawKbChunks(ox) {
+  if (!boss || !boss.chunks || !boss.chunks.length) return;
+  const run = !game.paused && !(hitStop > 0);
+  boss.chunks.forEach((c) => {
+    if (run) {
+      c.t++;
+      if (c.rest > 0) c.rest++;
+      else {
+        c.x += c.vx;
+        c.z += c.vz;
+        c.vz -= 0.55;
+        c.rot += c.vr;
+        if (c.z <= 0) {
+          c.z = 0;
+          if (Math.abs(c.vz) > 2.2) { c.vz = -c.vz * 0.32; c.vx *= 0.55; c.vr *= 0.5; }
+          else { c.vz = 0; c.rest = 1; }
+        }
+      }
+    }
+    const a = c.rest > 80 ? Math.max(0, 1 - (c.rest - 80) / 40) : 1;
+    const sc = scaleAt(c.gy), r = c.r * sc;
+    const x = c.x - cameraX + ox, y = c.gy - c.z - r * 0.8;
+    if (c.z < 40) shadow(x, c.gy + 2, r * (1 - c.z / 60));
+    // 瓦礫の王と同じ、白っぽい石のかけら(ふちは黒、ときどき赤い結晶)
+    ctx.save();
+    ctx.globalAlpha = a;
+    ctx.translate(x, y);
+    ctx.rotate(c.rot);
+    ctx.beginPath();
+    c.pts.forEach((k, i) => {
+      const an = (i / c.pts.length) * Math.PI * 2;
+      const px = Math.cos(an) * r * k, py = Math.sin(an) * r * k * 0.8;
+      i ? ctx.lineTo(px, py) : ctx.moveTo(px, py);
+    });
+    ctx.closePath();
+    ctx.fillStyle = c.red ? '#c8141e' : `rgb(${c.shade},${c.shade},${c.shade - 6})`;
+    ctx.fill();
+    ctx.lineWidth = Math.max(1.5, r * 0.14);
+    ctx.strokeStyle = '#1c1a1a';
+    ctx.stroke();
+    // 陰(下半分を少し暗く)
+    ctx.clip();
+    ctx.fillStyle = 'rgba(0,0,0,0.28)';
+    ctx.fillRect(-r * 1.2, r * 0.15, r * 2.4, r * 1.2);
+    ctx.fillStyle = 'rgba(255,255,255,0.35)';
+    ctx.fillRect(-r * 0.5, -r * 0.6, r * 0.5, r * 0.25);
+    ctx.restore();
+  });
+  if (run) boss.chunks = boss.chunks.filter((c) => c.rest <= 120);
+}
+// ヒビ:段階ごとに決まった形(絵の縦横に対する割合で持つので、どのコマでも同じあたりに入る)
+const KB_CRACKS = [];
+(function () {
+  let seed = 7;
+  const rnd = () => ((seed = (seed * 16807) % 2147483647) / 2147483647);
+  KB_BREAK.cracks.forEach((n) => {
+    const list = [];
+    for (let i = 0; i < n; i++) {
+      let u = 0.28 + rnd() * 0.44, v = 0.12 + rnd() * 0.66;
+      const pts = [[u, v]];
+      let ang = rnd() * 6.28;
+      const segs = 4 + Math.floor(rnd() * 4);
+      for (let k = 0; k < segs; k++) {
+        ang += (rnd() - 0.5) * 1.4;
+        const len = 0.035 + rnd() * 0.05;
+        u += Math.cos(ang) * len * 0.75;
+        v += Math.sin(ang) * len * 0.5;
+        pts.push([u, v]);
+      }
+      list.push(pts);
+    }
+    KB_CRACKS.push(list);
+  });
+})();
+let kbCrackCv = null;
+function kbCracked(key, stage) {
+  const img = SPRITES[key];
+  if (!stage || !img || !img.complete || !img.naturalWidth) return null;
+  if (!kbCrackCv) kbCrackCv = document.createElement('canvas');
+  const c = kbCrackCv, w = img.naturalWidth, h = img.naturalHeight;
+  if (c.width !== w || c.height !== h) { c.width = w; c.height = h; } else c.getContext('2d').clearRect(0, 0, w, h);
+  const g = c.getContext('2d');
+  g.globalCompositeOperation = 'source-over';
+  g.drawImage(img, 0, 0);
+  g.globalCompositeOperation = 'source-atop'; // 体の上にだけ描く
+  g.fillStyle = `rgba(40,8,8,${0.07 * stage})`; // 段階ごとに少しずつくすむ
+  g.fillRect(0, 0, w, h);
+  const glow = 0.6 + 0.4 * Math.sin(animTick / 9);
+  g.lineCap = 'round';
+  g.lineJoin = 'round';
+  for (let s = 0; s < stage; s++) {
+    KB_CRACKS[s].forEach((pts) => {
+      g.beginPath();
+      pts.forEach(([u, v], i) => (i ? g.lineTo(u * w, v * h) : g.moveTo(u * w, v * h)));
+      g.strokeStyle = 'rgba(18,8,8,0.9)';
+      g.lineWidth = Math.max(2, h * 0.014);
+      g.stroke();
+      g.strokeStyle = `rgba(255,${70 + 40 * glow},40,${0.4 + 0.35 * glow})`; // ヒビの奥の赤い光
+      g.lineWidth = Math.max(1, h * 0.005);
+      g.stroke();
+    });
+  }
+  c.naturalWidth = w;
+  c.naturalHeight = h;
+  c.complete = true;
+  return c;
 }
 
 const DRUM_SIZE = 1.75; // ドラム缶の大きさ
