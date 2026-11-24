@@ -1970,7 +1970,7 @@ SPRITES.bgDemo2.src = 'data:image/webp;base64,UklGRvqnAQBXRUJQVlA4IO6nAQAwjQSdAS
 
 // ===== バージョン(タイトル画面の右下に小さく出す。履歴と巻き戻しは VERSIONS.md) =====
 const GAME_LIGHT = true; // Light版
-const GAME_VERSION = 'v0.87';
+const GAME_VERSION = 'v0.88';
 // ===== 難易度(STARTの後の画面で選ぶ。選んだものはこの端末に覚えておく) =====
 // dmg=敵(ボス含む)から受けるダメージの倍率 / hp=敵とボスの体力の倍率 / cd=敵とボスが次に攻撃してくるまでの間隔の倍率
 const DIFFICULTY = {
@@ -7858,7 +7858,7 @@ function kbAddChunk(big) {
     rot: Math.random() * 6.28,
     vr: (Math.random() - 0.5) * (big > 0.6 ? 0.4 : 0.2),
     r: big > 0.6 ? 16 + Math.random() * 14 : 6 + Math.random() * 5, // 塊の大きさ(px、手前の大きさで)
-    pts: Array.from({ length: 7 }, (_, i) => 0.65 + Math.random() * 0.45), // ゴツゴツした形
+    pts: Array.from({ length: 9 + Math.floor(Math.random() * 4) }, () => 0.6 + Math.random() * 0.45), // ゴツゴツした形
     red: Math.random() < (big > 0.6 ? 0.35 : 0.1), // ときどき赤い結晶のかけら
     shade: 205 + Math.floor(Math.random() * 40),
     t: 0,
@@ -7888,7 +7888,8 @@ function drawKbChunks(ox) {
     const sc = scaleAt(c.gy), r = c.r * sc;
     const x = c.x - cameraX + ox, y = c.gy - c.z - r * 0.8;
     if (c.z < 40) shadow(x, c.gy + 2, r * (1 - c.z / 60));
-    // 瓦礫の王と同じ、白っぽい石のかけら(ふちは黒、ときどき赤い結晶)
+    // 瓦礫の王の絵から切り取った石(赤い結晶)の模様を、ゴツゴツした形に貼る
+    const T = kbChunkTex();
     ctx.save();
     ctx.globalAlpha = a;
     ctx.translate(x, y);
@@ -7896,24 +7897,71 @@ function drawKbChunks(ox) {
     ctx.beginPath();
     c.pts.forEach((k, i) => {
       const an = (i / c.pts.length) * Math.PI * 2;
-      const px = Math.cos(an) * r * k, py = Math.sin(an) * r * k * 0.8;
+      const px = Math.cos(an) * r * k, py = Math.sin(an) * r * k * 0.82;
       i ? ctx.lineTo(px, py) : ctx.moveTo(px, py);
     });
     ctx.closePath();
-    ctx.fillStyle = c.red ? '#c8141e' : `rgb(${c.shade},${c.shade},${c.shade - 6})`;
+    ctx.fillStyle = c.red ? '#9e1018' : '#8d8a86';
     ctx.fill();
-    ctx.lineWidth = Math.max(1.5, r * 0.14);
-    ctx.strokeStyle = '#1c1a1a';
-    ctx.stroke();
-    // 陰(下半分を少し暗く)
+    ctx.save();
     ctx.clip();
-    ctx.fillStyle = 'rgba(0,0,0,0.28)';
-    ctx.fillRect(-r * 1.2, r * 0.15, r * 2.4, r * 1.2);
-    ctx.fillStyle = 'rgba(255,255,255,0.35)';
-    ctx.fillRect(-r * 0.5, -r * 0.6, r * 0.5, r * 0.25);
+    if (T) {
+      if (!c.src) {
+        const list = c.red && T.red.length ? T.red : T.stone;
+        c.src = list[Math.floor(Math.random() * list.length)];
+      }
+      const ps = Math.max(6, (2.2 * r) / T.zoom(c.gy)); // 本体と同じくらいの模様の細かさになる切り取り幅
+      ctx.imageSmoothingEnabled = true;
+      ctx.drawImage(T.img, c.src[0] - ps / 2, c.src[1] - ps / 2, ps, ps, -r * 1.1, -r * 1.1, r * 2.2, r * 2.2);
+    }
+    // 上から光・下に陰(立体に見せる)
+    const sh = ctx.createLinearGradient(0, -r, 0, r);
+    sh.addColorStop(0, 'rgba(255,255,255,0.18)');
+    sh.addColorStop(0.5, 'rgba(0,0,0,0)');
+    sh.addColorStop(1, 'rgba(0,0,0,0.45)');
+    ctx.fillStyle = sh;
+    ctx.fillRect(-r * 1.2, -r * 1.2, r * 2.4, r * 2.4);
+    ctx.restore();
+    ctx.lineWidth = Math.max(1, r * 0.08);
+    ctx.strokeStyle = 'rgba(20,18,18,0.85)';
+    ctx.stroke();
     ctx.restore();
   });
   if (run) boss.chunks = boss.chunks.filter((c) => c.rest <= 120);
+}
+// かけらに貼る模様:瓦礫の王の待機の絵(kbIdle1)の中で、まわりまで全部うまっている所を「石」「赤い結晶」に分けて覚えておく
+let KB_CHUNK_TEX = null;
+function kbChunkTex() {
+  if (KB_CHUNK_TEX) return KB_CHUNK_TEX.img ? KB_CHUNK_TEX : null;
+  const img = SPRITES.kbIdle1;
+  if (!img || !img.complete || !img.naturalWidth) return null;
+  KB_CHUNK_TEX = {};
+  try {
+    const w = img.naturalWidth, h = img.naturalHeight;
+    const c = document.createElement('canvas');
+    c.width = w; c.height = h;
+    const g = c.getContext('2d');
+    g.drawImage(img, 0, 0);
+    const d = g.getImageData(0, 0, w, h).data;
+    const at = (x, y) => (y * w + x) * 4;
+    const stone = [], red = [], R = 6;
+    for (let y = R; y < h - R; y += 3)
+      for (let x = R; x < w - R; x += 3) {
+        let ok = true;
+        for (const [dx, dy] of [[-R, -R], [R, -R], [-R, R], [R, R], [0, 0]]) if (d[at(x + dx, y + dy) + 3] < 250) { ok = false; break; }
+        if (!ok) continue;
+        const i = at(x, y), r = d[i], gg = d[i + 1], b = d[i + 2];
+        if (r > 150 && gg < 90 && b < 90) red.push([x, y]);
+        else if (Math.abs(r - gg) < 30 && Math.abs(gg - b) < 30 && r + gg + b > 420) stone.push([x, y]); // 明るい石の所だけ(影の所は使わない)
+      }
+    if (!stone.length) return null;
+    // 本体を描く時の倍率(drawSprite と同じ計算)。模様の細かさを本体に合わせるのに使う
+    const zoom = (gy) => ((scaleAt(gy) * BOSS_DRAW_MUL) / spriteDiv('kbIdle1')) * spriteSizeFix('kbIdle1');
+    KB_CHUNK_TEX = { img, stone, red, zoom };
+    return KB_CHUNK_TEX;
+  } catch (e) {
+    return null;
+  }
 }
 // ヒビ:段階ごとに決まった形(絵の縦横に対する割合で持つので、どのコマでも同じあたりに入る)
 const KB_CRACKS = [];
