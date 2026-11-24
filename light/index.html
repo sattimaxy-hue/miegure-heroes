@@ -1970,7 +1970,7 @@ SPRITES.bgDemo2.src = 'data:image/webp;base64,UklGRvqnAQBXRUJQVlA4IO6nAQAwjQSdAS
 
 // ===== バージョン(タイトル画面の右下に小さく出す。履歴と巻き戻しは VERSIONS.md) =====
 const GAME_LIGHT = true; // Light版
-const GAME_VERSION = 'v0.85';
+const GAME_VERSION = 'v0.86';
 // ===== 難易度(STARTの後の画面で選ぶ。選んだものはこの端末に覚えておく) =====
 // dmg=敵(ボス含む)から受けるダメージの倍率 / hp=敵とボスの体力の倍率 / cd=敵とボスが次に攻撃してくるまでの間隔の倍率
 const DIFFICULTY = {
@@ -2888,6 +2888,12 @@ function bossHitPos() {
 }
 // deathDur: やられ演出の長さ。reviveDur: 復活時の ダウン→起き上がり。postDur: 攻撃を出した後に決めポーズを残す長さ
 const BOSS_ANIM = { deathDur: 84, reviveDur: 60, postDur: 14, turnDur: 12 };
+// 2026-11-25 瓦礫の王の動きの仕上げ。dashF:突進で突っ込むのにかかるコマ数 / blend:コマが切り替わる時に前のコマを重ねる長さ(F)
+//   lean:溜めでのけぞる角度 / lunge:殴った瞬間に踏み込む距離(px) / ghost:突進の残像の数
+const KB_MOTION = { dashF: 9, blend: 5, lean: 0.05, lunge: 26, ghost: 5 };
+// ヒステリックウェイブのふちどり。w:太さ(px) / rgb:ふちの色(濃い紺) / cut:これより薄いしぶきはふちを付けない(0〜255)
+//   fill:髪のすき間を埋める大きさ(元の絵のドット数) / inner:すき間の奥を暗くする濃さ(0〜1)
+const HW_OUTLINE = { w: 2.5, rgb: [10, 12, 42], cut: 110, fill: 2, inner: 0.55 };
 const BOSS_DEATH_SEQ = ['kbHurtL2', 'kbHurtL3', 'kbDeath1', 'kbDeath2', 'kbDeath3', 'kbDeath4', 'kbDeath5', 'kbDeath6', 'kbDeath7', 'kbDeath8'];
 function seqFrame(prefix, n, p) {
   return prefix + (1 + Math.min(n - 1, Math.max(0, Math.floor(p * n))));
@@ -3127,6 +3133,7 @@ function bossSpriteKey() {
     return boss.hurtMax >= 8 ? seqFrame('kbHurtL', 4, p) : seqFrame('kbHurtS', 3, p);
   }
   if (boss.summonT > 0) return boss.summonT > 40 ? 'kbWin2' : 'kbWin3'; // 両手を上げて手下を呼ぶ
+  if (boss.dashT > 0) return 'kbRush3'; // 突進中は前に突っ込む姿
   if (boss.teleTimer > 0) {
     const t = boss.teleTimer;
     if (boss.teleType === 'quake') return t > 45 ? 'kbSmash1' : t > 28 ? 'kbSmash2' : t > 10 ? 'kbSmash4' : 'kbSmash3';
@@ -3139,7 +3146,7 @@ function bossSpriteKey() {
     if (boss.postType === 'quake') return 'kbSmash5';
     if (boss.postType === 'rush') return 'kbRush' + (4 + Math.min(3, Math.floor(p * 4)));
     if (boss.postType === 'blow') return p < 0.4 ? 'kbSwing4' : 'kbSwing5';
-    return 'kbPunch3';
+    return p < 0.55 ? 'kbPunch3' : 'kbPunch2'; // 殴った後、拳を引いてから構えに戻る
   }
   if (boss.turn > 0) return seqFrame('kbTurn', 4, 1 - boss.turn / BOSS_ANIM.turnDur);
   if (boss.moveT > 0) return 'kbWalk' + (1 + (Math.floor((boss.walkDist || 0) / WALK_ANIM.kbStride) % 14)); // 実際に動いている時だけ歩く(画面端で足踏みしない・奥行き移動でも歩く)
@@ -6039,6 +6046,7 @@ function drawHW(ox) {
   const bob = b.st === 'intro' && z > 0 ? Math.sin(b.t / 12) * 4 : 0;
   // 被弾:点滅で半透明にすると消えたように見えるので、一瞬白っぽく光らせるだけにする
   if (b.hitFlash > 0 && !(b.dying > 0) && b.hitFlash % 4 < 2) ctx.filter = 'brightness(1.8) saturate(0.6)';
+  drawHWOutline(key, sx, b.y - z + bob, sc, b.face); // 水の背景に溶けないよう、ふちどり
   drawSprite(key, sx, b.y - z + bob, sc, b.face, 0, null, false);
   ctx.restore();
   if (b.st === 'move' && b.move === 'heal') {
@@ -6061,6 +6069,62 @@ function drawHW(ox) {
     }
     ctx.restore();
   }
+}
+// ヒステリックウェイブのふちどり:絵の形(すき間は埋めた形)を紺で作り、上下左右にずらして重ねて輪郭線にする
+const HW_SIL = {};
+function hwSilhouette(key) {
+  if (HW_SIL[key]) return HW_SIL[key];
+  const img = SPRITES[key];
+  if (!img || !img.complete || !img.naturalWidth) return null;
+  const w = img.naturalWidth, h = img.naturalHeight;
+  const c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const g = c.getContext('2d');
+  g.drawImage(img, 0, 0);
+  let m;
+  try { m = g.getImageData(0, 0, w, h); } catch (e) { return null; }
+  // 半透明のしぶき(うすい所)は外し、髪のすき間の小さな穴は埋める(ふくらませてから縮める)
+  const R = HW_OUTLINE.fill;
+  let a = new Uint8Array(w * h);
+  for (let i = 0; i < w * h; i++) a[i] = m.data[i * 4 + 3] > HW_OUTLINE.cut ? 1 : 0;
+  const pass = (src, grow, horiz) => {
+    const out = new Uint8Array(w * h);
+    for (let y = 0; y < h; y++)
+      for (let x = 0; x < w; x++) {
+        let v = grow ? 0 : 1;
+        for (let k = -R; k <= R; k++) {
+          const xx = horiz ? x + k : x, yy = horiz ? y : y + k;
+          const s = xx < 0 || yy < 0 || xx >= w || yy >= h ? 0 : src[yy * w + xx];
+          if (grow ? s : !s) { v = grow ? 1 : 0; break; }
+        }
+        out[y * w + x] = v;
+      }
+    return out;
+  };
+  a = pass(pass(a, true, true), true, false);
+  a = pass(pass(a, false, true), false, false);
+  const [r, gg, b] = HW_OUTLINE.rgb;
+  for (let i = 0; i < w * h; i++) {
+    m.data[i * 4] = r; m.data[i * 4 + 1] = gg; m.data[i * 4 + 2] = b; m.data[i * 4 + 3] = a[i] ? 255 : 0;
+  }
+  g.putImageData(m, 0, 0);
+  c.naturalWidth = w; c.naturalHeight = h; c.complete = true;
+  return (HW_SIL[key] = c);
+}
+function drawHWOutline(key, x, y, sc, face) {
+  const sil = hwSilhouette(key);
+  if (!sil) return;
+  ctx.save();
+  drawSprite.img = sil;
+  const r = HW_OUTLINE.w;
+  for (let i = 0; i < 8; i++) {
+    const an = (i / 8) * Math.PI * 2;
+    drawSprite(key, x + Math.cos(an) * r, y + Math.sin(an) * r, sc, face, 0, null, false);
+  }
+  ctx.globalAlpha *= HW_OUTLINE.inner;
+  drawSprite(key, x, y, sc, face, 0, null, false); // すき間の奥も少し暗くして、水の背景と分ける
+  drawSprite.img = null;
+  ctx.restore();
 }
 // 登場の後光:空から差す光の柱、背中の水の翼(水鞭のパーツを左右対称に)、体のまわりを回る水の輪、落ちるしずく
 function drawHWHalo(sx, fy, sc, t) {
@@ -6705,6 +6769,7 @@ function updateBoss() {
     return;
   }
   if (boss.hitFlash > 0) boss.hitFlash--;
+  if (boss.ghosts) { boss.ghosts.forEach((g) => (g.a -= 0.12)); boss.ghosts = boss.ghosts.filter((g) => g.a > 0); }
   boss.rage = boss.hp <= boss.maxHp * BOSS_SPEC.rageRatio;
   if (boss.quakeHold > 0) {
     // 柱が出ている間:その場で地面を叩き続ける(移動・振り向き・次の攻撃なし、押されても動かない)
@@ -6737,8 +6802,10 @@ function updateBoss() {
       sfx('bossAppear');
     }
   }
-  if (!held && Math.abs(dx) > 110 * BOSS_SIZE) boss.x += Math.sign(dx) * BOSS_SPEC.speed;
-  if (!held && Math.abs(dy) > 30) boss.y += Math.sign(dy) * BOSS_SPEC.depthSpeed;
+  // 2026-11-25 技の予備動作中・出した直後・突進中は、足を止めてその場で構える(前は絵が止まったまま滑っていた)
+  const rooted = held || boss.teleTimer > 0 || boss.post > 0 || boss.dashT > 0;
+  if (!rooted && Math.abs(dx) > 110 * BOSS_SIZE) boss.x += Math.sign(dx) * BOSS_SPEC.speed;
+  if (!rooted && Math.abs(dy) > 30) boss.y += Math.sign(dy) * BOSS_SPEC.depthSpeed;
   boss.y = Math.max(DEPTH_TOP + 70, clampY(boss.y)); // 5mあるので奥に行きすぎると頭がHUDに隠れる
   boss.x = Math.max(cameraX + 190, Math.min(cameraX + W - 190, boss.x));
   // 向き:プレイヤーの反対側に回られたら振り向く(攻撃の予兆・決めポーズ中は振り向きモーションを省略)
@@ -6755,24 +6822,29 @@ function updateBoss() {
     if (boss.teleType === 'quake' && boss.teleTimer % 6 === 0)
       addFx(boss.x + (Math.random() - 0.5) * 160, boss.y - 10, 'corrupt', null, 1);
     boss.teleTimer--;
+    // 突進:溜めが終わったら、KB_MOTION.dashF コマかけて実際に突っ込む(当たり判定は突っ込み終わった時)
+    if (boss.teleTimer === 0 && boss.teleType === 'rush' && !boss.dashDone) {
+      const dashDx = Math.sign(player.x - boss.x) * Math.min(Math.abs(player.x - boss.x), BOSS_SPEC.rushDash);
+      boss.dashVx = dashDx / KB_MOTION.dashF;
+      boss.dashT = KB_MOTION.dashF;
+      boss.dashDone = true;
+      boss.teleTimer = KB_MOTION.dashF;
+      boss.ghosts = [];
+      addFx(boss.x - (Math.sign(dashDx) || 1) * 50, boss.y - 90, 'dash', null, 1.4, Math.sign(dashDx) || 1);
+      shake = Math.max(shake, 5);
+    }
+    if (boss.dashT > 0) {
+      boss.dashT--;
+      if (boss.ghosts) boss.ghosts.push({ x: boss.x, y: boss.y, key: 'kbRush3', face: boss.face, a: 1 });
+      boss.x = Math.max(cameraX + 190, Math.min(cameraX + W - 190, boss.x + boss.dashVx));
+      if (animTick % 3 === 0) addFx(boss.x - boss.face * 60, boss.y - 6, 'debris', null, 1);
+    }
     if (boss.teleTimer === 0) {
+      boss.dashDone = false;
       let countered = false;
       boss.post = BOSS_ANIM.postDur;
       boss.postType = boss.teleType;
-      if (boss.teleType === 'rush') {
-        // 突進:距離を一気に詰めて叩きつける
-        const dashDx =
-          Math.sign(player.x - boss.x) * Math.min(Math.abs(player.x - boss.x), BOSS_SPEC.rushDash);
-        boss.x = Math.max(cameraX + 190, Math.min(cameraX + W - 190, boss.x + dashDx));
-        addFx(
-          boss.x - (Math.sign(dashDx) || 1) * 50,
-          boss.y - 90,
-          'dash',
-          null,
-          1.4,
-          Math.sign(dashDx) || 1
-        );
-      }
+      // (突進の移動は上で、実際に突っ込む形で済ませている)
       const dxNow = player.x - boss.x;
       const inRange =
         boss.teleType === 'quake'
@@ -7248,7 +7320,7 @@ function spriteSizeFix(key) {
   return SPRITE_SIZE_FIX[key.endsWith('_s2') ? key.slice(0, -3) : key] || 1; // ステージ2の色違いも同じ
 }
 function drawSprite(key, x, y, scale, facing, flash, tint, crisp) {
-  const img = SPRITES[key];
+  const img = drawSprite.img || SPRITES[key]; // drawSprite.img:同じ大きさ・位置で別の絵(影など)を描く時だけ使う
   if (!img || !img.complete || !img.naturalWidth) return false;
   const dv0 = spriteDiv(key);
   scale = (scale / dv0) * spriteSizeFix(key);
@@ -7670,7 +7742,7 @@ function drawBoss(ox) {
   const sx = boss.x - cameraX + ox + (hitStop > 0 && boss.hitFlash > 0 && !(boss.dying > 0) ? (hitStop % 2 ? 3 : -3) : 0),
     by = boss.y,
     sc = scaleAt(boss.y);
-  if (boss.teleTimer > 0) {
+  if (boss.teleTimer > 0 && !(boss.dashT > 0)) {
     const blink = boss.teleTimer % 8 < 4 ? 0.42 : 0.2;
     ctx.fillStyle =
       boss.teleType === 'quake' ? `rgba(255,60,60,${blink})` : `rgba(255,160,0,${blink})`;
@@ -7685,7 +7757,52 @@ function drawBoss(ox) {
   ctx.save();
   if (boss.rage) ctx.filter = 'saturate(1.7) hue-rotate(-16deg) brightness(1.1)';
   const flick = boss.dying > 0 || boss.reviveAnim > 0 ? 0 : boss.hitFlash;
-  drawSprite(key, sx, by, sc * BOSS_DRAW_MUL, boss.face || (player.x < boss.x ? -1 : 1), flick, null, false); // 引き伸ばしが大きいので補間して滑らかに
+  const face = boss.face || (player.x < boss.x ? -1 : 1);
+  // 体の動きを足す(止まった絵が続く所に、溜め・踏み込み・叩きつけの動き)
+  let offX = 0, offY = 0, rot = 0;
+  const KM = KB_MOTION;
+  if (!(boss.dying > 0) && !(boss.reviveAnim > 0) && !(boss.entrance > 0)) {
+    if (boss.teleTimer > 0 && !(boss.dashT > 0)) {
+      const total = boss.teleType === 'quake' ? BOSS_SPEC.quakeTele : boss.teleType === 'rush' ? BOSS_SPEC.rushTele : boss.teleType === 'blow' ? BOSS_SPEC.blowTele : BOSS_SPEC.tele;
+      const p = Math.min(1, 1 - boss.teleTimer / total);
+      rot = -face * KM.lean * Math.sin(p * Math.PI * 0.5); // だんだん後ろへのけぞって力を溜める
+      if (boss.teleTimer < 14) offX = (animTick % 4 < 2 ? 1.5 : -1.5); // 打つ直前は力んで震える
+    } else if (boss.post > 0 && boss.postType !== 'quake') {
+      const p = 1 - boss.post / BOSS_ANIM.postDur;
+      offX = face * KM.lunge * Math.max(0, 1 - p * 1.6); // 殴った瞬間に前へ踏み込み、すぐ戻る
+      rot = face * KM.lean * 0.6 * Math.max(0, 1 - p * 2);
+    }
+    if (boss.quakeHold > 0) offY = boss.quakeHold % 20 < 10 ? 0 : -5 * Math.max(0, 1 - ((boss.quakeHold % 10) / 6)); // 叩くたびに体が上下
+    if (boss.dashT > 0) rot = face * 0.07; // 突進中は前のめり
+  }
+  // 突進の残像
+  if (boss.ghosts && boss.ghosts.length) {
+    boss.ghosts.forEach((g) => {
+      ctx.save();
+      ctx.globalAlpha = g.a * 0.45;
+      ctx.filter = 'brightness(1.6) saturate(0.4)';
+      drawSprite(g.key, g.x - cameraX + ox, g.y, sc * BOSS_DRAW_MUL, g.face, 0, null, false);
+      ctx.restore();
+    });
+  }
+  // コマのつなぎ:前のコマを一瞬重ねる(歩き・待機の細かいコマ送りでは重ねない)
+  const grp = (k) => k.replace(/\d+$/, '');
+  if (boss.drawKey && boss.drawKey !== key) {
+    const g0 = grp(boss.drawKey), g1 = grp(key);
+    const cyc = g1 === 'kbWalk' || g1 === 'kbIdle';
+    if (!(cyc && g0 === g1) && !(boss.hitFlash > 0)) { boss.blendKey = boss.drawKey; boss.blendT = KM.blend; }
+  }
+  boss.drawKey = key;
+  ctx.translate(sx + offX, by + offY);
+  if (rot) ctx.rotate(rot);
+  if (boss.blendT > 0 && boss.blendKey) {
+    ctx.save();
+    ctx.globalAlpha = (boss.blendT / (KM.blend + 1)) * 0.75;
+    drawSprite(boss.blendKey, 0, 0, sc * BOSS_DRAW_MUL, face, 0, null, false);
+    ctx.restore();
+    boss.blendT--;
+  }
+  drawSprite(key, 0, 0, sc * BOSS_DRAW_MUL, face, flick, null, false); // 引き伸ばしが大きいので補間して滑らかに
   ctx.restore();
 }
 
