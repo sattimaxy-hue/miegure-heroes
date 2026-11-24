@@ -7,6 +7,7 @@ STAGE 1「三重重工正門」／ STAGE 2「三重重工ダム」 ― BLACK DEA
 
 - **本編**：https://sattimaxy-hue.github.io/miegure-heroes/
 - **ミエグレ外伝 正門突破**（ミニゲーム単体）：https://sattimaxy-hue.github.io/miegure-heroes/gaiden/
+- **Light版**（絵を軽くした版。古いスマホ向け）：https://sattimaxy-hue.github.io/miegure-heroes/light/
 
 スマホでもパソコンでも、開くだけで遊べる（インストール不要）。
 パソコンは キーボード（←→↑↓・Z／X など）、スマホは画面のボタンで操作。
@@ -19,9 +20,10 @@ STAGE 1「三重重工正門」／ STAGE 2「三重重工ダム」 ― BLACK DEA
 | `index.html` | 本編（画像・音・プログラムが全部この1つに入ってる） |
 | `intro.mp4` | オープニングムービー（`index.html` と同じ場所に置く） |
 | `gaiden/index.html` | ミニゲーム「ミエグレ外伝 正門突破」の単体版 |
+| `light/index.html` | Light版（絵を半分の細かさにした軽い版。オープニング動画も中に入ってる） |
 | `handheld/` | 携帯ゲーム機（Linux中華機など）向けのキット |
 | `はじめにお読みください.txt` | 遊び方の説明書 |
 
 ## 版
 
-v0.83（2026-11-17）
+v0.85（2026-11-24）
