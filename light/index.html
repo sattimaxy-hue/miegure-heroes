@@ -1970,7 +1970,7 @@ SPRITES.bgDemo2.src = 'data:image/webp;base64,UklGRvqnAQBXRUJQVlA4IO6nAQAwjQSdAS
 
 // ===== バージョン(タイトル画面の右下に小さく出す。履歴と巻き戻しは VERSIONS.md) =====
 const GAME_LIGHT = true; // Light版
-const GAME_VERSION = 'v0.92';
+const GAME_VERSION = 'v0.93';
 // ===== 難易度(STARTの後の画面で選ぶ。選んだものはこの端末に覚えておく) =====
 // dmg=敵(ボス含む)から受けるダメージの倍率 / hp=敵とボスの体力の倍率 / cd=敵とボスが次に攻撃してくるまでの間隔の倍率
 const DIFFICULTY = {
@@ -5587,6 +5587,8 @@ function spawnHW() {
 const hwSc = () => scaleAt(boss.y) * HW.scale;
 // 2026-11-26 動きの仕上げ。blend:コマが切り替わる時に前のコマを重ねる長さ(F) / lunge:放つ瞬間に前へ踏み込む距離(px)
 const HW_MOTION = { blend: 4, lunge: 16 };
+// 2026-11-26 立ちポーズ:横向きの構え。key:使う絵 / breath:呼吸で縦に伸び縮みする割合 / period:呼吸1回のフレーム数 / sway:前後の揺れ(px)
+const HW_STANCE = { key: 'hwWalk1', breath: 0.016, period: 110, sway: 2 };
 function hwInvuln() {
   const b = boss;
   return b.st === 'intro' || b.dying > 0 || (b.st === 'move' && (b.move === 'swirl' || b.move === 'sp'));
@@ -6025,11 +6027,11 @@ function hwKey() {
       case 'wave':
         return t < 8 ? 'hwWave1' : t < 16 ? 'hwWave2' : 'hwWave3';
       case 'dash':
-        return t <= 30 ? hwFrame('hwDash', 5, t, 31) : t < 42 ? 'hwDash5' : 'hwIdle1'; // 突進の後は踏ん張ってから戻る
+        return t <= 30 ? hwFrame('hwDash', 5, t, 31) : t < 42 ? 'hwDash5' : HW_STANCE.key; // 突進の後は踏ん張ってから構えに戻る
       case 'heal':
         return t < 20 ? hwFrame('hwWin', 4, t, 20) : 'hwWin' + (5 + (Math.floor(t / 6) % 4));
       case 'sp':
-        if (t >= 200) return 'hwIdle1';
+        if (t >= 200) return HW_STANCE.key;
         // ため→水柱が立ち上がる間は、全身がきれいに収まっている「勝利・演出」の水の噴き上がるコマを使う(必殺技のコマはセルが細くて髪や水柱が切れていた)
         return t < 45 ? hwFrame('hwSp', 3, t, 45) : 'hwWin' + (5 + (Math.floor((t - 45) / 6) % 4)); // 大津波の間も水が噴き上がり続ける
     }
@@ -6039,7 +6041,7 @@ function hwKey() {
     return 'hwWalk' + (1 + ((b.mvX || 0) * b.face < 0 ? 7 - i : i)); // 後ろへ下がる時は逆回し(後ずさり)
   }
   // 動いた距離でコマを送る(足が滑らない)
-  return 'hwIdle' + (1 + (Math.floor(animTick / 9) % 8));
+  return HW_STANCE.key; // 止まっている時は横向きの構え(呼吸は drawHW で)
 }
 function drawHW(ox) {
   const b = boss;
@@ -6082,8 +6084,19 @@ function drawHW(ox) {
     ctx.restore();
     if (!game.paused) b.blendT--;
   }
+  const stance = key === HW_STANCE.key && !(b.walking && b.moveT > 0) && b.st !== 'move' && !(b.dying > 0);
+  if (stance) {
+    const ph = (animTick % HW_STANCE.period) / HW_STANCE.period * Math.PI * 2;
+    mx += Math.sin(ph) * HW_STANCE.sway * b.face;
+    ctx.save();
+    const fy = b.y - z + bob + my;
+    ctx.translate(sx + mx, fy);
+    ctx.scale(1, 1 + Math.sin(ph) * HW_STANCE.breath);
+    ctx.translate(-(sx + mx), -fy);
+  }
   drawHWOutline(key, sx + mx, b.y - z + bob + my, sc, b.face); // 水の背景に溶けないよう、ふちどり
   drawSprite(key, sx + mx, b.y - z + bob + my, sc, b.face, 0, null, false);
+  if (stance) ctx.restore();
   ctx.restore();
   if (b.st === 'move' && b.move === 'heal') {
     // ヒーリング:足元の光の輪と、立ちのぼる水色の粒
